@@ -106,3 +106,23 @@ vvp sim.out
 ```
 
 Hardware (Vivado): add all `rtl/*.v` and `third_party/picorv32/picorv32.v` as design sources, add `constraints/basys3.xdc`, set `top` as the top module, run Synthesis → Implementation → Generate Bitstream.
+
+## Getting started
+
+Clone with the submodule:
+```bash
+git clone --recurse-submodules https://github.com/omvmahadik-png/TinyGPU.git
+cd TinyGPU
+```
+
+Build a firmware image (example: GPU matvec benchmark). The simulation loads `firmware/firmware.hex`, so this step is required before running any testbench:
+```bash
+riscv64-unknown-elf-as -march=rv32im -mabi=ilp32 -o firmware/gpu_matvec.o firmware/gpu_matvec.s
+riscv64-unknown-elf-ld -m elf32lriscv -Ttext=0x0 -o firmware/gpu_matvec.elf firmware/gpu_matvec.o
+riscv64-unknown-elf-objcopy -O binary firmware/gpu_matvec.elf firmware/gpu_matvec.bin
+xxd -e -g4 -c4 firmware/gpu_matvec.bin | awk '{print $2}' > firmware/firmware.hex
+```
+
+## Known issue
+
+In the GPU matvec firmware, PicoRV32 raises `trap` in the idle loop after all results and cycle counts have been computed and stored. Results and measurements are unaffected, since they are captured before the trap. Root cause not yet identified.
