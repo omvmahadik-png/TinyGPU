@@ -2,7 +2,7 @@
 .global _start
 
 _start:
-    li   x11, 0x220      # x (vector)
+    li   x11, 0x700      # x (vector)
     li   x30, 0x400      # M (matrix base)
     li   x31, 0x500      # y (output base)
 
