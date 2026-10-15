@@ -1,121 +1,87 @@
 # TinyGPU
 
-A small SIMD accelerator built from scratch in Verilog, integrated into a RISC-V system-on-chip, and benchmarked against scalar CPU execution on dot product and matrix-vector multiplication.
+A 4-lane SIMD multiply-accumulate accelerator written in Verilog, attached as a memory-mapped peripheral to a PicoRV32 RISC-V core, and benchmarked against scalar CPU execution on dot product and matrix-vector multiplication.
 
-## What this is
+## Overview
 
-TinyGPU is a 4-lane SIMD processing array — four identical multiply-accumulate units executing the same instruction on different data each cycle — wired as a memory-mapped peripheral on a RISC-V core (PicoRV32). A RISC-V C/assembly program writes vector data into the accelerator, triggers computation, polls for completion, and reads back results, the same way it would drive any other peripheral.
-
-The project also implements a per-lane masking mechanism, letting individual lanes skip an operation while others proceed under the same instruction stream — a small-scale version of how real GPUs handle branch divergence across SIMT threads.
+Four identical processing elements (PEs) execute the same operation on different data each cycle. A RISC-V program loads operand pairs into the accelerator through memory-mapped registers, triggers a step, polls a done flag, and reads back four accumulators. A per-lane mask lets individual lanes skip an update while the others proceed (predication, not full branch divergence).
 
 ## Architecture
 
+```
+RISC-V CPU (PicoRV32)
+      |
+ memory-mapped bus (address-decoded)
+      |
+  ------------------------------
+  |          |                 |
+ RAM       GPIO          TinyGPU (gpu_mmio)
+                                |
+                           scheduler
+                                |
+                            pe_array  <-- vector_mem (4 operand lanes)
+                          /  |   |  \
+                        PE0 PE1 PE2 PE3
+```
 
-cat > README.md << 'EOF'
-# TinyGPU
+| File | Role |
+|---|---|
+| `rtl/pe.v` | Signed 8x8 multiply-accumulate with 32-bit accumulator |
+| `rtl/vector_mem.v` | Operand storage, all four lanes readable at once |
+| `rtl/pe_array.v` | Four PEs with shared control and per-lane mask gating |
+| `rtl/scheduler.v` | Turns a CPU trigger into one MAC step, latches `done` |
+| `rtl/gpu_mmio.v` | Register interface (lane data, mask, start, clear, status, 4 results) |
+| `rtl/top.v` | PicoRV32 + RAM + GPIO + GPU with address decoding |
 
-A small SIMD accelerator built from scratch in Verilog, integrated into a RISC-V system-on-chip, and benchmarked against scalar CPU execution on dot product and matrix-vector multiplication.
-
-## What this is
-
-TinyGPU is a 4-lane SIMD processing array — four identical multiply-accumulate units executing the same instruction on different data each cycle — wired as a memory-mapped peripheral on a RISC-V core (PicoRV32). A RISC-V C/assembly program writes vector data into the accelerator, triggers computation, polls for completion, and reads back results, the same way it would drive any other peripheral.
-
-The project also implements a per-lane masking mechanism, letting individual lanes skip an operation while others proceed under the same instruction stream — a small-scale version of how real GPUs handle branch divergence across SIMT threads.
-
-## Architecture
-
-
-
-cat > README.md << 'EOF'
-# TinyGPU
-
-A small SIMD accelerator built from scratch in Verilog, integrated into a RISC-V system-on-chip, and benchmarked against scalar CPU execution on dot product and matrix-vector multiplication.
-
-## What this is
-
-TinyGPU is a 4-lane SIMD processing array — four identical multiply-accumulate units executing the same instruction on different data each cycle — wired as a memory-mapped peripheral on a RISC-V core (PicoRV32). A RISC-V C/assembly program writes vector data into the accelerator, triggers computation, polls for completion, and reads back results, the same way it would drive any other peripheral.
-
-The project also implements a per-lane masking mechanism, letting individual lanes skip an operation while others proceed under the same instruction stream — a small-scale version of how real GPUs handle branch divergence across SIMT threads.
-
-## Architecture
-
-
-cat > README.md << 'EOF'
-# TinyGPU
-
-A small SIMD accelerator built from scratch in Verilog, integrated into a RISC-V system-on-chip, and benchmarked against scalar CPU execution on dot product and matrix-vector multiplication.
-
-## What this is
-
-TinyGPU is a 4-lane SIMD processing array — four identical multiply-accumulate units executing the same instruction on different data each cycle — wired as a memory-mapped peripheral on a RISC-V core (PicoRV32). A RISC-V C/assembly program writes vector data into the accelerator, triggers computation, polls for completion, and reads back results, the same way it would drive any other peripheral.
-
-The project also implements a per-lane masking mechanism, letting individual lanes skip an operation while others proceed under the same instruction stream — a small-scale version of how real GPUs handle branch divergence across SIMT threads.
-
-## Architecture
-
-
-
-
-- **`pe.v`** — single processing element: signed 8×8 multiply-accumulate
-- **`vector_mem.v`** — shared operand storage, 4 independently-addressable lanes
-- **`pe_array.v`** — 4 PEs wired to shared memory, with per-lane mask gating
-- **`scheduler.v`** — sequences a MAC step on trigger, reports busy/done
-- **`gpu_mmio.v`** — memory-mapped register interface (write operands, set mask, trigger, poll status, read results)
-- **`top.v`** — full system integration: PicoRV32 + RAM + GPIO + TinyGPU, address-decoded onto one bus
+Register map (base `0x20000000`): `0x00` lane data, `0x04` mask, `0x08` start, `0x0C` clear, `0x10` status, `0x14-0x20` accumulators 0-3.
 
 ## Results
 
-Benchmarked on a cycle-accurate RTL simulation (Icarus Verilog + Vivado XSim, cross-validated on both toolchains), synthesized and implemented for the Basys3 (Artix-7 xc7a35t).
+RTL simulation in Icarus Verilog, cycle counts from PicoRV32's `rdcycle`.
 
-| Benchmark | Scalar RISC-V (cycles) | TinyGPU-accelerated (cycles) | Speedup |
+| Benchmark | Scalar (cycles) | Accelerated (cycles) | Speedup |
 |---|---:|---:|---:|
 | Dot product (N=8) | 677 | 530 | 1.28x |
-| Matrix-vector multiply (4×8) | 2977 | 2277 | 1.31x |
+| Matrix-vector (4x8) | 2977 | 2277 | 1.31x |
 
-All results independently verified correct against hand-computed expected values on both the scalar and accelerated paths.
+Outputs match hand-computed values on both paths (dot product 62; matvec [62, 24, 6, 53]).
 
-### Why the speedup is ~1.3x, not ~4x
+The speedup is modest because each 4-wide MAC takes one cycle, while the CPU spends many instructions per chunk loading operands, packing them into registers, writing the mask and trigger, and polling for completion. This is an inference from the instruction sequence, not a profiled breakdown.
 
-The 4 PE lanes compute in true parallel — a full 4-wide multiply-accumulate step costs 1 clock cycle. But at this problem size, that 1-cycle compute is dwarfed by the RISC-V control overhead surrounding each step: loading operands from RAM, packing and writing them to the accelerator's registers, setting the mask, triggering, and polling for completion — all done as individual RISC-V instructions. The bottleneck here is data movement and control, not compute, which is a genuine and common finding in real accelerator design, not a project shortcoming. A larger vector length would amortize this per-chunk overhead better; a wider memory interface (writing multiple lanes per CPU cycle instead of one at a time) would be the natural next optimization.
+### Caveats
+
+- The scalar baseline uses PicoRV32's multi-cycle `mul` and an unoptimized, non-unrolled loop, so part of the gap comes from the multiplier and not only from parallelism.
+- The accelerator uses 8-bit operands; the scalar path uses 32-bit. The test data fits in 8 bits, but the two are not equivalent in general.
+- Per-lane masking was verified in a standalone scheduler test. The final benchmarks always use mask `1111`, so masking is not exercised in the integrated system.
+
+## Hardware status
+
+- The CPU + GPIO system and the standalone PE test were taken through Vivado to a bitstream for the Basys3 (xc7a35t). The CPU + GPIO design met timing at a 100 MHz clock constraint.
+- The full accelerator system has only been simulated. It has not been synthesized, and nothing has been flashed to a board.
 
 ## Debugging notes
 
-A few bugs worth documenting, since they were the most instructive part of the build:
+**Hex format mismatch.** `objcopy -O verilog` emits one byte per line, but `$readmemh` was loading into a 32-bit memory, so every instruction was misaligned and the CPU trapped. Found by comparing `objdump -d` against the hex file, then fixed by generating one 32-bit word per line.
 
-**Hex-format mismatch (Phase 0).** `objcopy -O verilog` emits one byte per line by default; `$readmemh` was loading those bytes into a 32-bit-wide memory array, misaligning every instruction. Diagnosed by comparing `objdump -d` output against the raw `.hex` file line-by-line, rather than trusting that "the simulation ran without errors" meant it was correct.
+**Testbench race condition.** PE results came out exactly doubled. The testbench changed `valid` at the same instant as the clock edge the DUT sampled on. Driving stimulus on `negedge clk` fixed it.
 
-**Testbench race condition (Phase 1).** A PE's MAC results came out exactly double what was expected. Cause: testbench signals were changed on the same simulation instant as the clock edge the DUT sampled on (`@(posedge clk); valid = 0;`), creating a race that sometimes double-triggered the operation. Fixed by driving all testbench stimulus on `negedge clk` instead, well clear of the DUT's sampling edge.
+**Pulse vs. level signalling.** The CPU's poll loop hung because `done` was a one-cycle pulse and PicoRV32 takes several cycles per instruction, so it could miss it. `done` is now latched until the next operation starts.
 
-**Pulse-vs-level signaling bug (Phase 4).** After wiring the accelerator to the CPU, the poll loop hung indefinitely even though the accelerator had genuinely finished. Cause: the scheduler's `done` signal was a single-cycle pulse, but PicoRV32 takes several clock cycles per instruction — so the CPU's poll loop would sometimes check `done` in the gap between pulses and never catch it high. Fixed by latching `done` as a level signal that persists until the next operation starts, rather than pulsing and immediately clearing every cycle.
+## Known issue
 
-## Toolchain
-
-- Verilog: Icarus Verilog (simulation) + Vivado (synthesis, implementation, hardware)
-- RISC-V core: [PicoRV32](https://github.com/YosysHQ/picorv32) (submodule)
-- Firmware: RISC-V GCC toolchain (`riscv64-unknown-elf-*`), hand-written RV32IM assembly
-- Target board: Digilent Basys3 (Xilinx Artix-7, xc7a35tcpg236-1)
-
-## Repository structure
-
-## Building and running
-
-Simulation (Icarus Verilog):
-```bash
-iverilog -o sim.out -I rtl third_party/picorv32/picorv32.v rtl/*.v sim/<testbench>.v
-vvp sim.out
-```
-
-Hardware (Vivado): add all `rtl/*.v` and `third_party/picorv32/picorv32.v` as design sources, add `constraints/basys3.xdc`, set `top` as the top module, run Synthesis → Implementation → Generate Bitstream.
+In the GPU matvec firmware, PicoRV32 raises `trap` in the idle loop after all results and cycle counts have been stored. Results and measurements are unaffected. Changing the idle loop did not change when or where the trap fires, so the root cause is unresolved.
 
 ## Getting started
 
 Clone with the submodule:
+
 ```bash
 git clone --recurse-submodules https://github.com/omvmahadik-png/TinyGPU.git
 cd TinyGPU
 ```
 
-Build a firmware image (example: GPU matvec benchmark). The simulation loads `firmware/firmware.hex`, so this step is required before running any testbench:
+The simulation loads `firmware/firmware.hex`, so build a firmware image first (example: GPU matvec):
+
 ```bash
 riscv64-unknown-elf-as -march=rv32im -mabi=ilp32 -o firmware/gpu_matvec.o firmware/gpu_matvec.s
 riscv64-unknown-elf-ld -m elf32lriscv -Ttext=0x0 -o firmware/gpu_matvec.elf firmware/gpu_matvec.o
@@ -123,6 +89,13 @@ riscv64-unknown-elf-objcopy -O binary firmware/gpu_matvec.elf firmware/gpu_matve
 xxd -e -g4 -c4 firmware/gpu_matvec.bin | awk '{print $2}' > firmware/firmware.hex
 ```
 
-## Known issue
+Then simulate:
 
-In the GPU matvec firmware, PicoRV32 raises `trap` in the idle loop after all results and cycle counts have been computed and stored. Results and measurements are unaffected, since they are captured before the trap. Root cause not yet identified.
+```bash
+iverilog -o sim.out -I rtl third_party/picorv32/picorv32.v rtl/*.v sim/gpu_matvec_tb.v
+vvp sim.out
+```
+
+## Toolchain
+
+Icarus Verilog, Vivado, RISC-V GCC (`riscv64-unknown-elf-*`), PicoRV32 (submodule), Digilent Basys3.
