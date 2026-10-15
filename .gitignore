@@ -1,0 +1,29 @@
+# Simulation artifacts
+*.vcd
+*.out
+*.o
+
+# Vivado generated files
+*.jou
+*.log
+*.str
+.Xil/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.srcs/
+vivado*.backup.log
+webtalk*.log
+webtalk*.jou
+
+# Compiled firmware binaries (keep .s source, not build outputs)
+firmware/*.o
+firmware/*.elf
+firmware/*.bin
+firmware/*.hex
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
